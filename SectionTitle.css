@@ -1,0 +1,13 @@
+.section-title {
+  font-family: 'Boulder', sans-serif;
+  text-transform: uppercase;
+  font-size: 28px;
+  color: #1A1A1A;
+  text-align: center;
+  margin: 0;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .section-title { font-size: 22px; }
+}

@@ -1,0 +1,28 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: linear-gradient(to bottom, #F4717F, #F4A44A);
+}
+
+html {
+  height: auto;
+  overflow-y: auto;
+}
+
+body {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  height: auto;
+  overflow-y: auto;
+}
+
+#root {
+  display: block !important;
+  min-height: unset !important;
+  overflow: visible !important;
+}

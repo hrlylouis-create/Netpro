@@ -1,0 +1,65 @@
+@keyframes badge-shine {
+  0%   { left: -75%; }
+  40%  { left: 125%; }
+  100% { left: 125%; }
+}
+
+.mrr-hero-img-wrap {
+  background: transparent !important;
+}
+
+.mrr-badge-populaire {
+  background: #22C55E;
+  color: white;
+  font-family: 'Boulder', sans-serif;
+  text-transform: uppercase;
+  font-size: 12px;
+  padding: 4px 16px;
+  border-radius: 999px;
+  align-self: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.mrr-badge-populaire::after {
+  content: '';
+  position: absolute;
+  top: -10%;
+  left: -75%;
+  width: 40%;
+  height: 120%;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%);
+  transform: skewX(-20deg);
+  animation: badge-shine 5s ease-in-out infinite;
+}
+
+
+.mrr-sans-engagement {
+  font-family: 'Poppins', sans-serif;
+  font-size: 13px;
+  color: #1A1A1A;
+  letter-spacing: -0.05em;
+}
+
+.mrr-badge-offert {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #22C55E;
+  color: white;
+  font-family: 'Boulder', sans-serif;
+  text-transform: uppercase;
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.mr-option-card {
+  position: relative;
+}
+
+.mr-inclus-grid {
+  grid-template-columns: repeat(4, 1fr);
+}

@@ -1,0 +1,49 @@
+.glass-btn {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 24px;
+  padding: 8px 22px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: #1A1A1A;
+  cursor: pointer;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+.glass-btn:hover {
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  transform: scale(1.06);
+}
+
+.glass-btn--dark {
+  background: rgba(26, 26, 26, 0.88);
+  border-color: rgba(26, 26, 26, 0.12);
+  color: white;
+}
+
+.glass-btn--dark:hover {
+  background: rgba(26, 26, 26, 0.96);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  color: white;
+}
+
+.glass-btn--orange {
+  background: rgba(232, 112, 48, 0.9);
+  border-color: rgba(232, 112, 48, 0.3);
+  color: white;
+}
+
+.glass-btn--orange:hover {
+  background: rgba(232, 112, 48, 1);
+  box-shadow: 0 4px 16px rgba(232, 112, 48, 0.35);
+  color: white;
+}

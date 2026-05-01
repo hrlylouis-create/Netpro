@@ -1,0 +1,703 @@
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
+import './TunnelSerenite.css'
+import './Home.css'
+import logo from './assets/netpro-logo.png'
+import CTAButton from './CTAButton'
+import { supabase } from './supabase'
+
+const TAUX_PLEIN = 28.90
+const TAUX_APRES = 14.95
+const TOTAL_STEPS = 7
+
+function progressColor(pct) {
+  if (pct < 40) return '#F4717F'
+  if (pct < 80) return '#F4824A'
+  return '#22C55E'
+}
+
+export default function TunnelEssentiel() {
+  const navigate = useNavigate()
+  const [step, setStep] = useState(1)
+
+  /* ── Step 1 – Adresse ── */
+  const [adresse, setAdresse] = useState('')
+  const [confirmedAddr, setConfirmedAddr] = useState('')
+  const [suggestions, setSuggestions] = useState([])
+  const [loadingSugg, setLoadingSugg] = useState(false)
+  const [savedAddresses, setSavedAddresses] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('netpro_saved_addresses') || '[]') } catch { return [] }
+  })
+
+  function toggleFavorite() {
+    if (!confirmedAddr) return
+    setSavedAddresses(prev => {
+      const next = prev.includes(confirmedAddr)
+        ? prev.filter(a => a !== confirmedAddr)
+        : [...prev, confirmedAddr]
+      localStorage.setItem('netpro_saved_addresses', JSON.stringify(next))
+      return next
+    })
+  }
+  const debounceRef = useRef(null)
+  const wrapRef = useRef(null)
+  const skipFetchRef = useRef(false)
+
+  /* ── Step 2 – Durée ── */
+  const [duree, setDuree] = useState(null)
+
+  /* ── Step 4 – Créneaux ── */
+  const [creneaux, setCreneaux] = useState([])
+
+  const SLOT_ROWS = [
+    { label: 'Matin',   slots: ['7:00','7:30','8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30','12:00'] },
+    { label: 'Journée', slots: ['12:30','13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30','17:00','17:30','18:00','18:30'] },
+    { label: 'Soir',    slots: ['19:00','19:30','20:00','20:30','21:00','21:30','22:00'] },
+  ]
+  const ALL_SLOTS = SLOT_ROWS.flatMap(r => r.slots)
+  const POPULAR_SLOTS = new Set(['7:30','8:00','8:30','9:00','9:30','10:00','10:30','20:30','21:00','21:30','22:00'])
+  const SURCHARGE_SLOTS = new Set(['7:00','7:30','21:00','21:30','22:00'])
+
+  const slotsPerBlock = duree ? duree * 2 + 1 : 1
+
+  function getBlockSlots(startSlot) {
+    const idx = ALL_SLOTS.indexOf(startSlot)
+    if (idx === -1) return []
+    return ALL_SLOTS.slice(idx, idx + slotsPerBlock)
+  }
+
+  function getBlockStartForSlot(slot) {
+    for (const start of creneaux) {
+      if (getBlockSlots(start).includes(slot)) return start
+    }
+    return null
+  }
+
+  function toggleCreneau(h) {
+    if (getBlockSlots(h).length < slotsPerBlock) return
+    if (creneaux.includes(h)) {
+      setCreneaux(prev => prev.filter(s => s !== h))
+      return
+    }
+    if (creneaux.length >= 3) return
+    setCreneaux(prev => [...prev, h])
+  }
+
+  function isInBlock(slot) {
+    return creneaux.some(start => getBlockSlots(start).includes(slot))
+  }
+
+  function isBlockStart(slot) {
+    return creneaux.includes(slot)
+  }
+
+  function getCreneauIndices(slot) {
+    return creneaux.reduce((acc, start, i) => {
+      if (getBlockSlots(start).includes(slot)) acc.push(i)
+      return acc
+    }, [])
+  }
+
+  /* ── Step 3 – Calendrier ── */
+  const [selectedDate, setSelectedDate] = useState(null)
+  const [calMonth, setCalMonth] = useState(() => { const d = new Date(); d.setDate(1); return d })
+
+  const MOIS_LONG = ['Janv','Févr','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc']
+  const DOW = ['Lu.','Ma.','Me.','Je.','Ve.','Sa.','Di.']
+  const today = new Date(); today.setHours(0,0,0,0)
+
+  function buildCalDays(monthDate) {
+    const year = monthDate.getFullYear()
+    const month = monthDate.getMonth()
+    const firstDay = new Date(year, month, 1)
+    const lastDay = new Date(year, month + 1, 0)
+    const startDow = (firstDay.getDay() + 6) % 7
+    const days = []
+    for (let i = 0; i < startDow; i++) days.push(null)
+    for (let d = 1; d <= lastDay.getDate(); d++) days.push(new Date(year, month, d))
+    return days
+  }
+
+  function isSelected(day) {
+    if (!selectedDate || !day) return false
+    return day.toDateString() === selectedDate.toDateString()
+  }
+
+  const DUREES = [
+    { val: 1.5, label: '1h30', hint: 'Idéal pour une surface d\'environ 30 à 40m²' },
+    { val: 2,   label: '2h',   hint: 'Idéal pour une surface d\'environ 40 à 55m²' },
+    { val: 2.5, label: '2h30', hint: 'Idéal pour une surface d\'environ 55 à 65m²' },
+    { val: 3,   label: '3h',   hint: 'Idéal pour une surface d\'environ 60 à 80m²' },
+    { val: 3.5, label: '3h30', hint: 'Idéal pour une surface d\'environ 75 à 90m²' },
+    { val: 4,   label: '4h',   hint: 'Idéal pour une surface d\'environ 90 à 110m²' },
+  ]
+
+  /* ── Step 5 – Remise des clés ── */
+  const [remiseCles, setRemiseCles] = useState(null)
+
+  const REMISE_OPTIONS = [
+    { val: 'presence', label: 'Je serai présent(e)', hint: 'Vous remettez les clés en main propre au pro' },
+    { val: 'tiers',    label: 'Tiers de confiance',  hint: 'Un proche ou voisin remet les clés à votre place' },
+    { val: 'lieu-sur', label: 'Lieu sûr',            hint: 'Les clés sont déposées dans un lieu convenu avec le pro' },
+  ]
+
+  /* ── Step 7 – Commentaire ── */
+  const [commentaire, setCommentaire] = useState('')
+
+  /* ── CGV ── */
+  const [cgvAccepted, setCgvAccepted] = useState(false)
+
+  /* ── Step 6 – Options ── */
+  const [options, setOptions] = useState(new Set())
+  const [optionPopup, setOptionPopup] = useState(null)
+
+  const OPTIONS = [
+    { id: 'plantes',  emoji: '🪴', label: 'Arrosage des plantes', surcharge: 0, offert: true  },
+    { id: 'vitres',   emoji: '🪟', label: 'Vitres',               surcharge: 3, offert: false },
+    { id: 'repassage',emoji: '👕', label: 'Repassage',            surcharge: 3, offert: false },
+    { id: 'produits', emoji: '🧴', label: 'Produits ménagers',    surcharge: 3, offert: false },
+  ]
+
+  function toggleOption(id) {
+    setOptions(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  /* ── Global ── */
+  const [avanceImmediate, setAvanceImmediate] = useState(true)
+  const [recapExpanded, setRecapExpanded] = useState(false)
+
+  /* ── BAN autocomplete ── */
+  useEffect(() => {
+    if (skipFetchRef.current) { skipFetchRef.current = false; return }
+    if (adresse.length < 3) { setSuggestions([]); return }
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      setLoadingSugg(true)
+      try {
+        const res = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(adresse)}&limit=5&type=housenumber`)
+        const data = await res.json()
+        setSuggestions(data.features || [])
+      } catch { setSuggestions([]) }
+      finally { setLoadingSugg(false) }
+    }, 300)
+    return () => clearTimeout(debounceRef.current)
+  }, [adresse])
+
+  useEffect(() => {
+    function onClickOutside(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setSuggestions([])
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [])
+
+  function selectSuggestion(feature) {
+    skipFetchRef.current = true
+    setAdresse(feature.properties.label)
+    setConfirmedAddr(feature.properties.label)
+    setSuggestions([])
+  }
+
+  function selectSavedAddress(addr) {
+    skipFetchRef.current = true
+    setAdresse(addr)
+    setConfirmedAddr(addr)
+    setSuggestions([])
+  }
+
+  /* ── Interception bouton retour navigateur ── */
+  useEffect(() => {
+    window.history.replaceState({ step: 1 }, '')
+    function handlePopState(e) {
+      const s = e.state?.step
+      if (s != null) {
+        setStep(s)
+        setRecapExpanded(s === 8)
+      }
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  /* ── Navigation ── */
+  const canNext = step === 1 ? !!confirmedAddr
+    : step === 2 ? duree !== null
+    : step === 4 ? selectedDate !== null
+    : step === 5 ? creneaux.length > 0
+    : step === 6 ? remiseCles !== null
+    : true
+
+  function goNext() {
+    if (!canNext) return
+    if (step === 3 && !optionPopup && (options.has('vitres') || options.has('repassage'))) {
+      setOptionPopup(true)
+      return
+    }
+    setOptionPopup(null)
+    const next = step === 7 ? 8 : step + 1
+    setStep(next)
+    if (next === 8) setRecapExpanded(true)
+    window.history.pushState({ step: next }, '')
+  }
+
+  function goPrev() {
+    window.history.back()
+  }
+
+  function goRestart() {
+    setStep(1)
+    setAdresse(''); setConfirmedAddr(''); setSuggestions([])
+    setDuree(null); setCreneaux([]); setSelectedDate(null)
+    setRemiseCles(null); setCommentaire(''); setOptions(new Set()); setRecapExpanded(false)
+    window.history.replaceState({ step: 1 }, '')
+  }
+
+  /* ── Calculs ── */
+  const surchargeOptions = duree
+    ? [...options].reduce((acc, id) => {
+        const o = OPTIONS.find(x => x.id === id)
+        return acc + (o ? o.surcharge * duree : 0)
+      }, 0)
+    : 0
+  const surchargeCreneau = duree ? creneaux.filter(c => SURCHARGE_SLOTS.has(c)).length * 5 * duree : 0
+  const prixSession = duree ? duree * TAUX_PLEIN : 0
+  const avanceDiscount = avanceImmediate ? (prixSession + surchargeOptions + surchargeCreneau) * 0.5 : 0
+  const total = duree ? prixSession + surchargeOptions + surchargeCreneau - avanceDiscount : null
+  const addrParts = confirmedAddr ? confirmedAddr.split(',') : null
+  const fmt = n => n.toFixed(2).replace('.', ',')
+
+  const MOIS_FR = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre']
+  const dureeLabel = DUREES.find(d => d.val === duree)?.label ?? '—'
+  const dateText = selectedDate ? `${selectedDate.getDate()} ${MOIS_FR[selectedDate.getMonth()]}` : '—'
+  const remiseLabel = REMISE_OPTIONS.find(r => r.val === remiseCles)?.label ?? '—'
+
+  /* ── Progress ── */
+  const progress = step >= 8 ? 100 : (step / TOTAL_STEPS) * 100
+
+  /* ════════════════════════════════════════
+     STEP 1 — Adresse
+  ════════════════════════════════════════ */
+  const renderStep1 = () => (
+    <>
+      <h2 className="smr-title">LE MEILLEUR PRO PRES DE CHEZ VOUS</h2>
+      <p className="smr-sub">Renseignez <strong>votre adresse postale</strong> (N°/Rue/Ville/CP)</p>
+
+      <div className="smr-search-wrap" ref={wrapRef}>
+        <input
+          className={`smr-search-input${confirmedAddr ? ' confirmed' : ''}`}
+          type="text"
+          placeholder="Recherchez votre adresse"
+          value={adresse}
+          onChange={e => { setAdresse(e.target.value); setConfirmedAddr('') }}
+          autoComplete="off"
+        />
+        {confirmedAddr && (
+          <button className="smr-search-check" onClick={() => { setAdresse(''); setConfirmedAddr(''); setSuggestions([]) }} type="button">
+            <span className="smr-search-check-tick">✓</span>
+            <span className="smr-search-check-clear">✕</span>
+          </button>
+        )}
+        <button
+          className={`smr-search-star${confirmedAddr && savedAddresses.includes(confirmedAddr) ? ' active' : ''}`}
+          onClick={e => { e.stopPropagation(); toggleFavorite() }}
+          type="button"
+        >
+          {confirmedAddr && savedAddresses.includes(confirmedAddr) ? '⭐' : '☆'}
+        </button>
+        {suggestions.length > 0 && (
+          <ul className="smr-suggestions">
+            {suggestions.map(f => (
+              <li key={f.properties.id} onClick={() => selectSuggestion(f)}>
+                <span className="smr-sugg-label">{f.properties.label}</span>
+                <span className="smr-sugg-city">{f.properties.city}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <p className="smr-section-label">Adresses favorites</p>
+      <div className="smr-saved-list">
+        {savedAddresses.map((addr, i) => (
+          <button
+            key={i}
+            className={`smr-saved-card${confirmedAddr === addr ? ' selected' : ''}`}
+            onClick={() => selectSavedAddress(addr)}
+          >
+            <span>{addr}</span>
+            <span className="smr-star">⭐</span>
+          </button>
+        ))}
+      </div>
+    </>
+  )
+
+  /* ════════════════════════════════════════
+     STEP 2 — Durée
+  ════════════════════════════════════════ */
+  const renderStep2 = () => {
+    const selected = DUREES.find(d => d.val === duree)
+    return (
+      <>
+        <h2 className="smr-title">COMBIEN D'HEURES DE BONHEUR ?</h2>
+        <p className="smr-sub"><strong>Combien de temps</strong> doit durer la session ?</p>
+
+        <div className="smr-duree-grid">
+          {DUREES.map(d => (
+            <button
+              key={d.val}
+              className={`smr-duree-btn${duree === d.val ? ' selected' : ''}`}
+              onClick={() => setDuree(d.val)}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+
+        {selected && (
+          <p className="smr-hint">Idéal pour une surface <strong>{selected.hint.replace('Idéal pour une surface ', '')}</strong></p>
+        )}
+      </>
+    )
+  }
+
+  /* ════════════════════════════════════════
+     STEP 3 — Calendrier
+  ════════════════════════════════════════ */
+  const renderStep3 = () => (
+    <>
+      <h2 className="smr-title">ON SE FIXE UNE DATE ?</h2>
+      <p className="smr-sub">Choisissez la <strong>date de votre session</strong></p>
+
+      <div className="smr-cal">
+        <div className="smr-cal-header">
+          <button className="smr-cal-nav" onClick={() => setCalMonth(m => { const n = new Date(m); n.setMonth(n.getMonth() - 1); return n })}>‹</button>
+          <span className="smr-cal-month">{MOIS_LONG[calMonth.getMonth()]} {String(calMonth.getFullYear()).slice(2)}</span>
+          <button className="smr-cal-nav" onClick={() => setCalMonth(m => { const n = new Date(m); n.setMonth(n.getMonth() + 1); return n })}>›</button>
+        </div>
+        <div className="smr-cal-grid">
+          {DOW.map(d => <div key={d} className="smr-cal-dow">{d}</div>)}
+          {buildCalDays(calMonth).map((day, i) => {
+            if (!day) return <div key={`e${i}`} className="smr-cal-day empty" />
+            const isPast = day < today
+            return (
+              <div
+                key={i}
+                className={`smr-cal-day${isSelected(day) ? ' selected' : ''}${isPast ? ' past' : ''}`}
+                onClick={() => !isPast && setSelectedDate(day)}
+              >
+                {day.getDate()}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </>
+  )
+
+  /* ════════════════════════════════════════
+     STEP 4 — Créneaux
+  ════════════════════════════════════════ */
+  const renderStep4 = () => (
+    <>
+      <h2 className="smr-title">ON EST SUR LE MÊME CRÉNEAU</h2>
+      <p className="smr-sub">
+        Choisissez <strong>jusqu'à 3 créneaux</strong>
+        {creneaux.length > 0 && creneaux.length < 3 && <> (encore {3 - creneaux.length})</>}
+        {creneaux.length === 3 && <> (maximum atteint)</>}
+      </p>
+
+      <div className="smr-slots-rows">
+        {SLOT_ROWS.map((row, ri) => (
+          <div key={ri} className="smr-slots-group">
+            <span className="smr-slots-label">{row.label}</span>
+            <div className="smr-slots-row">
+              {row.slots.map(h => {
+                const inBlock = isInBlock(h)
+                const isStart = isBlockStart(h)
+                const tooShort = getBlockSlots(h).length < slotsPerBlock
+                const maxed = creneaux.length >= 3 && !inBlock
+                const indices = inBlock ? getCreneauIndices(h) : []
+                const startIdx = creneaux.indexOf(h)
+                const primaryIdx = startIdx !== -1 ? startIdx : (indices[0] ?? -1)
+                const colorClass = primaryIdx !== -1 ? ` cren-${primaryIdx}` : ''
+                return (
+                  <div key={h} className="smr-slot-wrap">
+                    <button
+                      className={`smr-slot${inBlock ? ` selected${colorClass}` : ''}${isStart ? ' block-start' : ''}${POPULAR_SLOTS.has(h) ? ' popular' : ''}${(maxed || tooShort) ? ' disabled' : ''}`}
+                      onClick={() => toggleCreneau(h)}
+                    >
+                      {h}
+                    </button>
+                    {SURCHARGE_SLOTS.has(h) && <span className="smr-slot-surcharge">+5€/h</span>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+
+  /* ════════════════════════════════════════
+     STEP 5 — Remise des clés
+  ════════════════════════════════════════ */
+  const renderStep5 = () => (
+    <>
+      <h2 className="smr-title">COMMENT LE PRO ACCÈDE-T-IL ?</h2>
+      <p className="smr-sub">Comment souhaitez-vous <strong>remettre les clés</strong> ?</p>
+
+      <div className="smr-freq-list">
+        {REMISE_OPTIONS.map(opt => (
+          <button
+            key={opt.val}
+            className={`smr-freq-btn${remiseCles === opt.val ? ' selected' : ''}`}
+            onClick={() => setRemiseCles(opt.val)}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {remiseCles && (
+        <p className="smr-hint">{REMISE_OPTIONS.find(r => r.val === remiseCles)?.hint}</p>
+      )}
+    </>
+  )
+
+  /* ════════════════════════════════════════
+     STEP 6 — Options
+  ════════════════════════════════════════ */
+  const renderStep6 = () => (
+    <>
+      <h2 className="smr-title">QUELQUE CHOSE A AJOUTER ?</h2>
+      <p className="smr-sub">Enrichissez votre session avec des <strong>options à 3€/h</strong></p>
+
+      <div className="smr-options-grid">
+        {OPTIONS.map(o => (
+          <button
+            key={o.id}
+            className={`smr-option-card${options.has(o.id) ? ' selected' : ''}`}
+            onClick={() => toggleOption(o.id)}
+          >
+            <span className="smr-option-emoji">{o.emoji}</span>
+            <span className="smr-option-label">{o.label}</span>
+            <span className={`smr-option-price${o.offert ? ' offert' : ''}`}>
+              {o.offert ? 'Offert' : '+3€/h'}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <p className="smr-note">Prévoyez <strong>30 min supplémentaires</strong> par option pour le repassage et les vitres</p>
+
+      {optionPopup && (() => {
+        const extra = (options.has('vitres') ? 0.5 : 0) + (options.has('repassage') ? 0.5 : 0)
+        const extraLabel = extra === 1 ? '+1h' : '+30 min'
+        const newDuree = Math.min((duree ?? 1.5) + extra, 4)
+        const canAdd = (duree ?? 1.5) < 4
+        return (
+          <>
+            <div className="smr-outside-tap" onClick={() => { setOptionPopup(null); goNext() }} />
+            <div className="smr-option-popup">
+              <span className="smr-option-popup-emoji">
+                {options.has('vitres') && options.has('repassage') ? '🪟👕' : options.has('vitres') ? '🪟' : '👕'}
+              </span>
+              <p className="smr-option-popup-title">Pensez à prévoir le temps !</p>
+              <p className="smr-option-popup-text">
+                {options.has('vitres') && options.has('repassage')
+                  ? <>Les options <strong>Vitres</strong> et <strong>Repassage</strong> nécessitent du temps supplémentaire — comptez <strong>30 min par option</strong>.</>
+                  : options.has('vitres')
+                    ? <>L'option <strong>Vitres</strong> nécessite <strong>30 min supplémentaires</strong>.</>
+                    : <>L'option <strong>Repassage</strong> nécessite <strong>30 min supplémentaires</strong>.</>
+                }
+              </p>
+              {canAdd && (
+                <CTAButton color="pink" fullWidth onClick={() => { setDuree(newDuree); goNext() }}>
+                  Ajouter {extraLabel}
+                </CTAButton>
+              )}
+              <button className="smr-option-popup-skip" onClick={() => { setOptionPopup(null); goNext() }}>
+                {canAdd ? 'Continuer sans ajouter' : 'Continuer (durée max atteinte)'}
+              </button>
+            </div>
+          </>
+        )
+      })()}
+    </>
+  )
+
+  /* ════════════════════════════════════════
+     STEP 7 — Commentaire
+  ════════════════════════════════════════ */
+  const renderStep7 = () => (
+    <>
+      <h2 className="smr-title">QUELQUE CHOSE A AJOUTER ?</h2>
+      <p className="smr-sub">Laissez un commentaire pour le pro</p>
+
+      <textarea
+        className="smr-textarea"
+        placeholder="Écrivez ici..."
+        value={commentaire}
+        onChange={e => setCommentaire(e.target.value)}
+      />
+    </>
+  )
+
+  /* ════════════════════════════════════════
+     RENDER
+  ════════════════════════════════════════ */
+  return (
+    <div className="smr-page smr-page--essentiel">
+
+      <div className="gradient-bg" aria-hidden="true">
+        <div className="blob blob-orange" />
+        <div className="blob blob-pink" />
+        <div className="blob blob-orange2" />
+        <div className="blob blob-pink2" />
+      </div>
+
+      {/* ── Header ── */}
+      <header className="smr-header">
+        <button className="smr-logo-btn" onClick={() => navigate('/')}>
+          <img src={logo} alt="Netpro" className="smr-logo" />
+        </button>
+        <div className="smr-progress-bar">
+          <div className="smr-progress-fill" style={{ width: `${progress}%`, background: progressColor(progress) }} />
+        </div>
+        <div className="smr-header-toggle">
+          <span className={avanceImmediate ? 'smr-taux-barre' : 'smr-taux-reduit'}>{fmt(TAUX_PLEIN)}/h</span>
+          <button className={`smr-toggle${avanceImmediate ? ' on' : ''}`} onClick={() => setAvanceImmediate(v => !v)} />
+          <span className={avanceImmediate ? 'smr-taux-reduit' : 'smr-taux-barre'}>{fmt(TAUX_APRES)}/h</span>
+        </div>
+      </header>
+
+      {/* ── Step content ── */}
+      <main className="smr-main">
+        {step === 1 && renderStep1()}
+        {step === 2 && renderStep2()}
+        {step === 3 && renderStep6()}
+        {step === 4 && renderStep3()}
+        {step === 5 && renderStep4()}
+        {step === 6 && renderStep5()}
+        {(step === 7 || step === 8) && renderStep7()}
+      </main>
+
+      {recapExpanded && <div className="smr-outside-tap" onClick={() => step === 8 ? goPrev() : setRecapExpanded(false)} />}
+
+      {/* ── Navigation ── */}
+      <div className="smr-nav">
+        <div className="smr-nav-inner">
+          <button className="smr-retour" onClick={goPrev}>
+            <span className="smr-retour-arrow">‹</span> Retour
+          </button>
+          {step < 8 && (
+            <CTAButton color="pink" onClick={goNext} disabled={!canNext}>SUIVANT</CTAButton>
+          )}
+          {step > 1 && (
+            <button className="smr-restart" onClick={goRestart}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Bottom bar ── */}
+      <div
+        className={`smr-bottom-bar${recapExpanded ? ' expanded' : ''}`}
+        onClick={() => { if (!recapExpanded) setRecapExpanded(true) }}
+      >
+        {!recapExpanded && (
+          <div className="smr-mini-ticket">
+            <div className="smr-mini-ticket-handle" />
+            <div className="smr-mini-ticket-row">
+              <div className="smr-mini-ticket-left">
+                <span className="smr-mini-ticket-brand">NETPRO</span>
+                <span className="smr-mini-ticket-detail">
+                  {duree && selectedDate ? `${dureeLabel} · ${dateText}` : 'Essentiel'}
+                </span>
+              </div>
+              <div className="smr-mini-ticket-right">
+                <span className="smr-mini-ticket-label">TOTAL</span>
+                <span className="smr-mini-ticket-amount">{total ? `${fmt(total)}€` : '—'}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {recapExpanded && (
+          <div className="smr-ticket-wrapper">
+            <div className="smr-ticket">
+              <button className="smr-ticket-close" onClick={e => { e.stopPropagation(); setRecapExpanded(false) }} aria-label="Fermer">✕</button>
+              <div className="smr-ticket-body">
+                <div className="smr-ticket-head"><span className="smr-ticket-brand">NETPRO</span></div>
+                <p className="smr-ticket-subtitle">Réservation Essentiel</p>
+                <div className="smr-ticket-sep" />
+                <div className="smr-ticket-section">
+                  <div className="smr-ticket-row"><span>Session</span><span>{duree ? dureeLabel : '—'}</span></div>
+                  <div className="smr-ticket-row"><span>Date</span><span>{selectedDate ? `Le ${dateText}` : '—'}</span></div>
+                  {creneaux.length > 0 && <div className="smr-ticket-row"><span>Créneaux</span><span>{creneaux.join(', ')}</span></div>}
+                  {confirmedAddr && <div className="smr-ticket-row"><span>Adresse</span><span className="smr-ticket-val-wrap">{confirmedAddr}</span></div>}
+                  {remiseCles && <div className="smr-ticket-row"><span>Remise des clés</span><span>{remiseLabel}</span></div>}
+                </div>
+                <div className="smr-ticket-sep" />
+                <div className="smr-ticket-section">
+                  <div className="smr-ticket-row"><span>Prix/h</span><span>{fmt(TAUX_PLEIN)} €</span></div>
+                  <div className="smr-ticket-row"><span>Session ({dureeLabel})</span><span>{duree ? fmt(prixSession) : '—'} €</span></div>
+                  {options.size > 0 && <div className="smr-ticket-row"><span>Options ({options.size})</span><span>{surchargeOptions > 0 ? `+${fmt(surchargeOptions)} €` : 'Offertes'}</span></div>}
+                  {surchargeCreneau > 0 && <div className="smr-ticket-row"><span>Heures majorées</span><span>+{fmt(surchargeCreneau)} €</span></div>}
+                  {avanceImmediate && duree && <div className="smr-ticket-row smr-ticket-row--green"><span>Avance immédiate 50%</span><span>−{fmt(avanceDiscount)} €</span></div>}
+                </div>
+                <div className="smr-ticket-sep smr-ticket-sep--bold" />
+                <div className="smr-ticket-total"><span>TOTAL</span><span>{total ? fmt(total) + ' €' : '—'}</span></div>
+                <div className="smr-ticket-sep" />
+                <div className="smr-ticket-toggle">
+                  <span>Avance immédiate</span>
+                  <div className="smr-toggle-row">
+                    <span className={avanceImmediate ? 'smr-taux-barre' : 'smr-taux-reduit'}>{fmt(TAUX_PLEIN)}/h</span>
+                    <button className={`smr-toggle${avanceImmediate ? ' on' : ''}`} onClick={() => setAvanceImmediate(v => !v)} />
+                    <span className={avanceImmediate ? 'smr-taux-reduit' : 'smr-taux-barre'}>{fmt(TAUX_APRES)}/h</span>
+                  </div>
+                </div>
+                <div className="smr-ticket-sep" />
+                <div className="smr-ticket-comment">
+                  <p className="smr-ticket-comment-label">Note pour le pro</p>
+                  <textarea className="smr-ticket-comment-area" placeholder="Digicode, animal, instructions..." value={commentaire} onChange={e => setCommentaire(e.target.value)} rows={3} />
+                </div>
+
+                <div className="smr-ticket-sep" />
+
+                <label className="smr-cgv">
+                  <input type="checkbox" checked={cgvAccepted} onChange={e => setCgvAccepted(e.target.checked)} className="smr-cgv-check" />
+                  J'accepte les <a href="/cgv" target="_blank" rel="noopener noreferrer" className="smr-cgv-link">CGV</a>
+                </label>
+
+                <CTAButton color="pink" onClick={async () => {
+                  const { data: { user } } = await supabase.auth.getUser()
+                  if (user) {
+                    await supabase.from('abonnements').upsert({
+                      user_id: user.id,
+                      type: 'essentiel',
+                      label: 'Essentiel',
+                      statut: 'actif',
+                      depuis: new Date().toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }),
+                      prochaine_facturation: new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }),
+                      montant: '14,95€/h'
+                    })
+                  }
+                  navigate('/paiement')
+                }} disabled={!cgvAccepted} fullWidth>RÉSERVER</CTAButton>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+    </div>
+  )
+}

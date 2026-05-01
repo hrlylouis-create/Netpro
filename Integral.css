@@ -1,0 +1,7 @@
+.mr-option-card {
+  position: relative;
+}
+
+.mr-inclus-grid {
+  grid-template-columns: repeat(5, 1fr);
+}
